@@ -1,0 +1,76 @@
+name: CI Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  sonarQubeAnalysis:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Install SonarQube Scanner
+      run: |
+        curl -sSLo sonar-scanner-cli.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.6.2.2472-linux.zip
+        unzip sonar-scanner-cli.zip
+        mv sonar-scanner-4.6.2.2472-linux sonar-scanner
+
+    - name: Run SonarQube scan
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      run: |
+        sonar-scanner/bin/sonar-scanner \
+          -Dsonar.projectKey=my-Java-web-app \
+          -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+    - name: Check Quality Gate
+      id: quality_gate
+      run: |
+        curl -u ${{ secrets.SONAR_TOKEN }}: \
+          "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=my-Java-web-app" \
+          -o sonar.json
+        echo "SonarQube API Response:"
+        cat sonar.json # Print the content of the JSON file for debugging
+        qualityGateStatus=$(jq -r '.projectStatus.status' sonar.json || echo 'error')
+        if [ "$qualityGateStatus" = "error" ]; then
+          echo "Failed to parse JSON. Exiting."
+          exit 1
+        fi
+        echo "Quality Gate Status: $qualityGateStatus"
+        if [ "$qualityGateStatus" != "OK" ]; then
+          echo "Quality Gate failed"
+          exit 1
+        fi
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: sonarQubeAnalysis
+    if: failure()
+    steps:
+    - name: Send Notification Email
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.SMTP_LOGIN }}
+        password: ${{ secrets.SMTP_PASSWORD }}
+        subject: Quality Gate Failure
+        body: Quality Gate failed for project my-project
+        to: venkateshg9430@gmail.com
+        from: venkateshg9430@gmail.com
+
+  build:
+    runs-on: ubuntu-latest
+    needs: sonarQubeAnalysis
+    if: success()
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      
+    - name: Install dependencies
+      run: npm install
+
+    - name: Build
+      run: npm run build
